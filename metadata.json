@@ -1,0 +1,12 @@
+{
+  "name": "RESQNET — AI Disaster Response System",
+  "description": "AI-assisted disaster response coordination platform that converts citizen emergency reports into prioritized, location-based rescue actions.",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

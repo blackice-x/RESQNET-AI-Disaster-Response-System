@@ -35,6 +35,7 @@ import {
   Play,
   Pause,
   RefreshCw,
+  Layers,
 } from 'lucide-react';
 
 interface DroneSurveillanceProps {
@@ -65,6 +66,7 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
   const [streamPort, setStreamPort] = useState<string>('8080');
   const [customStreamUrl, setCustomStreamUrl] = useState<string>('http://192.168.1.6:8080/video');
   const [isStreamConnected, setIsStreamConnected] = useState<boolean>(false);
+  const [streamLiveUri, setStreamLiveUri] = useState<string | null>(null);
   const [streamSnapshotUri, setStreamSnapshotUri] = useState<string | null>(null);
   const [snapshotRefreshCount, setSnapshotRefreshCount] = useState<number>(0);
 
@@ -88,8 +90,9 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
   const [isRecording, setIsRecording] = useState<boolean>(true);
   const [recSeconds, setRecSeconds] = useState<number>(868);
 
-  // AI Detections & Scanning state
+  // AI Detections & Scanning state (Boxes hidden by default to keep real camera clean)
   const [detections, setDetections] = useState<DroneHazardDetection[]>(DRONE_HAZARD_DETECTIONS);
+  const [showDetectionBoxes, setShowDetectionBoxes] = useState<boolean>(false);
   const [selectedDetection, setSelectedDetection] = useState<DroneHazardDetection | null>(null);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
@@ -273,38 +276,33 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
     }
   };
 
-  // Connect to Play Store IP Webcam stream
+  // Connect to Play Store IP Webcam stream (Low-latency MJPEG direct stream)
   const connectPlayStoreStream = (overrideProtocol?: 'http' | 'https', overrideIp?: string, overridePort?: string) => {
     const proto = overrideProtocol || streamProtocol;
     const ip = (overrideIp || streamIp).trim();
     const port = (overridePort || streamPort).trim();
 
-    let url = customStreamUrl;
-    if (playStoreApp === 'IP_WEBCAM') {
-      url = `${proto}://${ip}:${port}/video`;
-    } else if (playStoreApp === 'DROIDCAM') {
-      url = `${proto}://${ip}:${port}/video`;
-    }
-    setCustomStreamUrl(url);
+    // The native /video endpoint in IP Webcam delivers continuous 30-60 FPS MJPEG stream with <50ms latency
+    const mjpegUrl = `${proto}://${ip}:${port}/video`;
+    setCustomStreamUrl(mjpegUrl);
+    setStreamLiveUri(mjpegUrl);
     setIsStreamConnected(true);
 
-    // Start snapshot polling loop as zero-CORS fallback
-    if (snapshotIntervalRef.current) clearInterval(snapshotIntervalRef.current);
-    const snapBase =
-      playStoreApp === 'IP_WEBCAM'
-        ? `${proto}://${ip}:${port}/shot.jpg`
-        : url;
-
-    snapshotIntervalRef.current = window.setInterval(() => {
-      setStreamSnapshotUri(`${snapBase}?t=${Date.now()}`);
-      setSnapshotRefreshCount((prev) => prev + 1);
-    }, 120);
+    // Stop any legacy snapshot polling interval to prevent phone CPU throttling & network lag
+    if (snapshotIntervalRef.current) {
+      clearInterval(snapshotIntervalRef.current);
+      snapshotIntervalRef.current = null;
+    }
   };
 
   // Disconnect stream
   const disconnectPlayStoreStream = () => {
-    if (snapshotIntervalRef.current) clearInterval(snapshotIntervalRef.current);
+    if (snapshotIntervalRef.current) {
+      clearInterval(snapshotIntervalRef.current);
+      snapshotIntervalRef.current = null;
+    }
     setIsStreamConnected(false);
+    setStreamLiveUri(null);
     setStreamSnapshotUri(null);
   };
 
@@ -403,18 +401,23 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
     }, 600);
   };
 
-  // Get CSS filter according to active Vision Mode
-  const getVisionFilterStyle = () => {
+  // Get direct CSS filter style according to active Vision Mode
+  const getVisionFilterCss = (): string => {
     switch (visionMode) {
-      case 'FLIR_THERMAL':
-        return 'filter contrast-150 saturate-200 hue-rotate-180 brightness-110 invert-[15%]';
       case 'NVG_NIGHT_VISION':
-        return 'filter sepia(100%) hue-rotate(85deg) saturate(300%) contrast(140%) brightness(120%)';
+        // Authentic Tactical Military Night Vision: Intense glowing phosphor green (NOT black & white)
+        return 'grayscale(100%) contrast(160%) brightness(125%) sepia(100%) hue-rotate(85deg) saturate(800%)';
+      case 'FLIR_THERMAL':
+        // FLIR Ironbow heat signature palette
+        return 'contrast(165%) saturate(220%) hue-rotate(185deg) brightness(110%) invert(20%)';
+      case 'IR_BLACK_WHITE':
+        // High-contrast IR Black & White / White Hot monochrome
+        return 'grayscale(100%) contrast(180%) brightness(110%)';
       case 'LIDAR_EDGES':
-        return 'filter contrast-200 grayscale(100%) invert(100%)';
+        return 'contrast(200%) grayscale(100%) invert(100%)';
       case 'OPTICAL':
       default:
-        return '';
+        return 'none';
     }
   };
 
@@ -780,7 +783,7 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
             </div>
           </div>
 
-          {/* Vision Filter Selector Pills */}
+          {/* Vision Filter Selector Pills & AI Box Toggle */}
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               onClick={() => setVisionMode('OPTICAL')}
@@ -795,6 +798,18 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
             </button>
 
             <button
+              onClick={() => setVisionMode('NVG_NIGHT_VISION')}
+              className={`px-2.5 py-1 rounded-lg font-bold border transition-all text-xs flex items-center space-x-1 ${
+                visionMode === 'NVG_NIGHT_VISION'
+                  ? 'bg-emerald-600 text-white border-emerald-300 shadow-md shadow-emerald-600/40 ring-1 ring-emerald-400'
+                  : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:bg-slate-700'
+              }`}
+            >
+              <Eye className="w-3.5 h-3.5 text-emerald-300" />
+              <span>NVG Green</span>
+            </button>
+
+            <button
               onClick={() => setVisionMode('FLIR_THERMAL')}
               className={`px-2.5 py-1 rounded-lg font-bold border transition-all text-xs flex items-center space-x-1 ${
                 visionMode === 'FLIR_THERMAL'
@@ -802,20 +817,34 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
                   : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:bg-slate-700'
               }`}
             >
-              <Eye className="w-3.5 h-3.5" />
+              <Eye className="w-3.5 h-3.5 text-amber-300" />
               <span>FLIR Thermal</span>
             </button>
 
             <button
-              onClick={() => setVisionMode('NVG_NIGHT_VISION')}
+              onClick={() => setVisionMode('IR_BLACK_WHITE')}
               className={`px-2.5 py-1 rounded-lg font-bold border transition-all text-xs flex items-center space-x-1 ${
-                visionMode === 'NVG_NIGHT_VISION'
-                  ? 'bg-emerald-700 text-white border-emerald-400 shadow-md shadow-emerald-700/30'
+                visionMode === 'IR_BLACK_WHITE'
+                  ? 'bg-slate-600 text-white border-slate-300 shadow-md'
                   : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:bg-slate-700'
               }`}
             >
-              <Eye className="w-3.5 h-3.5" />
-              <span>NVG Night</span>
+              <Eye className="w-3.5 h-3.5 text-slate-300" />
+              <span>IR B&W</span>
+            </button>
+
+            {/* Toggle to remove/show artificial flood hazard boxes */}
+            <button
+              onClick={() => setShowDetectionBoxes((prev) => !prev)}
+              className={`px-2.5 py-1 rounded-lg font-bold border transition-all text-xs flex items-center space-x-1.5 ${
+                showDetectionBoxes
+                  ? 'bg-cyan-800 text-cyan-200 border-cyan-400 shadow-sm'
+                  : 'bg-slate-850 text-slate-400 border-slate-700 hover:text-white'
+              }`}
+              title="Toggle simulated flood hazard sector boxes"
+            >
+              <Layers className="w-3.5 h-3.5 text-cyan-400" />
+              <span>{showDetectionBoxes ? 'Hazard Boxes: ON' : 'Hazard Boxes: OFF'}</span>
             </button>
 
             <button
@@ -879,27 +908,28 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
             autoPlay
             playsInline
             muted
-            className={`w-full h-full object-cover transition-all duration-300 ${getVisionFilterStyle()}`}
+            style={{ filter: getVisionFilterCss() }}
+            className="w-full h-full object-cover transition-all duration-300"
           />
         )}
 
         {cameraSource === 'PLAY_STORE_WIFI' && (
           <div className="relative w-full h-full bg-slate-950 flex items-center justify-center">
-            {isStreamConnected && streamSnapshotUri ? (
+            {isStreamConnected && (streamLiveUri || customStreamUrl) ? (
               <img
-                src={streamSnapshotUri}
-                alt="Play Store App Stream"
-                className={`w-full h-full object-cover transition-all duration-300 ${getVisionFilterStyle()}`}
-                onError={() => {
-                  // Fallback to aerial simulation if phone is offline
-                }}
+                src={streamLiveUri || customStreamUrl}
+                alt="Play Store IP Webcam Live Stream"
+                style={{ filter: getVisionFilterCss() }}
+                className="w-full h-full object-cover transition-all duration-300"
+                crossOrigin="anonymous"
               />
             ) : (
               <img
                 src={droneAerialImage}
                 alt="Aerial Drone Stream"
                 referrerPolicy="no-referrer"
-                className={`w-full h-full object-cover transition-all duration-500 ${getVisionFilterStyle()}`}
+                style={{ filter: getVisionFilterCss() }}
+                className="w-full h-full object-cover transition-all duration-500"
               />
             )}
           </div>
@@ -911,14 +941,16 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
               <img
                 src={pairedPhoneFrame}
                 alt="Paired Smartphone Camera Frame"
-                className={`w-full h-full object-cover transition-all duration-300 ${getVisionFilterStyle()}`}
+                style={{ filter: getVisionFilterCss() }}
+                className="w-full h-full object-cover transition-all duration-300"
               />
             ) : (
               <img
                 src={droneAerialImage}
                 alt="Aerial Simulation"
                 referrerPolicy="no-referrer"
-                className={`w-full h-full object-cover transition-all duration-500 ${getVisionFilterStyle()}`}
+                style={{ filter: getVisionFilterCss() }}
+                className="w-full h-full object-cover transition-all duration-500"
               />
             )}
           </div>
@@ -929,7 +961,8 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
             src={droneAerialImage}
             alt="Aerial Drone Disaster Surveillance Feed"
             referrerPolicy="no-referrer"
-            className={`w-full h-full object-cover transition-all duration-700 ${getVisionFilterStyle()}`}
+            style={{ filter: getVisionFilterCss() }}
+            className="w-full h-full object-cover transition-all duration-700"
           />
         )}
 
@@ -998,8 +1031,8 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
           </div>
         </div>
 
-        {/* AI COMPUTER VISION HAZARD & SURVIVOR DETECTION BOXES */}
-        {detections.map((hazard) => {
+        {/* AI COMPUTER VISION HAZARD & SURVIVOR DETECTION BOXES (Hidden by default when camera connects) */}
+        {showDetectionBoxes && detections.map((hazard) => {
           let borderColor = 'border-red-500 bg-red-500/20 text-red-300';
           let pingColor = 'bg-red-500';
 
@@ -1045,7 +1078,8 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
       </div>
 
       {/* AI HAZARD DETECTION SUMMARY & TARGET DISPATCH CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {(showDetectionBoxes || cameraSource === 'SIMULATION') && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="p-4 bg-slate-900 rounded-3xl border border-slate-800">
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
@@ -1152,6 +1186,7 @@ export const DroneSurveillance: React.FC<DroneSurveillanceProps> = ({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 };

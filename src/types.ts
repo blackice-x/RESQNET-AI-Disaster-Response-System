@@ -106,7 +106,12 @@ export type DroneCameraSource =
   | 'BLUETOOTH_BLE'
   | 'SIMULATION';
 
-export type VisionFilterMode = 'OPTICAL' | 'FLIR_THERMAL' | 'NVG_NIGHT_VISION' | 'LIDAR_EDGES';
+export type VisionFilterMode =
+  | 'OPTICAL'
+  | 'FLIR_THERMAL'
+  | 'NVG_NIGHT_VISION'
+  | 'IR_BLACK_WHITE'
+  | 'LIDAR_EDGES';
 
 export interface DroneConnectionState {
   source: DroneCameraSource;
